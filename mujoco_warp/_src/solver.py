@@ -34,6 +34,7 @@ from mujoco_warp._src.types import OverflowType
 from mujoco_warp._src.types import SolverContext
 from mujoco_warp._src.warp_util import cache_kernel
 from mujoco_warp._src.warp_util import event_scope
+from mujoco_warp._src.warp_util import use_graph_conditional
 
 wp.set_module_options({"enable_backward": False, "default_grid_stride": False})
 
@@ -3983,7 +3984,7 @@ def _solve(m: types.Model, d: types.Data, ctx: SolverContext, compact: bool = Fa
       outputs=[ctx.search, ctx.search_dot, ctx.prev_grad, ctx.prev_Mgrad, ctx.done, nsolving],
       block_dim=m.block_dim.solve_init_search_cg,
     )
-  if m.opt.iterations != 0 and m.opt.graph_conditional:
+  if m.opt.iterations != 0 and use_graph_conditional(m):
     # Note: the iteration kernel (indicated by while_body) is repeatedly launched
     # as long as condition_iteration is not zero.
     # condition_iteration is a warp array of size 1 and type int, it counts the number
@@ -4318,7 +4319,7 @@ def solve_compact(m: types.Model, d: types.Data):
   # Keep graph-conditional early-exit on CUDA (matches baseline: stops at convergence
   # instead of running all iterations); fall back to the plain loop on CPU.
   nvp = d.nvmax_pad
-  gc = m.opt.graph_conditional and wp.get_device().is_cuda
+  gc = use_graph_conditional(m)
   opt2 = dataclasses.replace(m.opt, graph_conditional=gc, tolerance=d.ctol, ls_tolerance=d.cls_tol)
   m2 = dataclasses.replace(
     m, opt=opt2, nv=nvp, nv_pad=nvp, is_sparse=False, dof_tri_row=d.cdof_tri_row, dof_tri_col=d.cdof_tri_col

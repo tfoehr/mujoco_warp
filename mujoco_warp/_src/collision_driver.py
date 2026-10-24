@@ -40,6 +40,7 @@ from mujoco_warp._src.types import mat23
 from mujoco_warp._src.types import mat63
 from mujoco_warp._src.warp_util import cache_kernel
 from mujoco_warp._src.warp_util import event_scope
+from mujoco_warp._src.warp_util import use_graph_conditional
 
 wp.set_module_options({"enable_backward": False, "default_grid_stride": False})
 
@@ -858,7 +859,7 @@ def nxn_broadphase(
   # since pass 1. A wake is exactly a body whose state changed between awake_prev and body_awake
   # (nothing sleeps between the passes), so the condition is derived here rather than threaded in.
   cond = None
-  if incremental and m.opt.graph_conditional:
+  if incremental and use_graph_conditional(m):
     cond = wp.zeros(1, dtype=int)
     wp.launch(_any_awake_changed, dim=(d.nworld, m.nbody), inputs=[d.body_awake, awake_prev], outputs=[cond])
 

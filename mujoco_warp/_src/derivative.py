@@ -41,6 +41,7 @@ from mujoco_warp._src.types import vec6
 from mujoco_warp._src.types import vec10
 from mujoco_warp._src.warp_util import cache_kernel
 from mujoco_warp._src.warp_util import event_scope
+from mujoco_warp._src.warp_util import use_graph_conditional
 
 wp.set_module_options({"enable_backward": False, "default_grid_stride": False})
 
@@ -4058,7 +4059,7 @@ def eff_solve(m: Model, d: Data, qacc: wp.array2d[float], qfrc: Optional[wp.arra
     )
 
   if max_it > 0:
-    if m.opt.graph_conditional and wp.get_device().is_cuda:
+    if use_graph_conditional(m):
       wp.capture_while(efm_nsolving, while_body=_pcg_iteration)
     else:
       for _ in range(max_it):

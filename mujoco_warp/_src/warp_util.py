@@ -167,9 +167,24 @@ def cache_kernel(func):
   return wrapper
 
 
+def use_graph_conditional(m) -> bool:
+  """Whether `wp.capture_while`/`wp.capture_if` can be used for `m` right now.
+
+  Outside of graph capture these run as host-driven loops on any GPU. During capture
+  they need conditional graph nodes, which HIP/ROCm and CUDA < 12.4 do not provide;
+  callers then fall back to their fixed-count unrolled loops.
+  """
+  if not m.opt.graph_conditional:
+    return False
+  device = wp.get_device()
+  if not device.is_cuda:
+    return False
+  return not device.is_capturing or wp.is_conditional_graph_supported()
+
+
 def check_toolkit_driver():
   wp.init()
-  if wp.get_device().is_cuda:
+  if wp.get_device().is_cuda and not getattr(wp.get_device(), "is_hip", False):
     if not wp.is_conditional_graph_supported():
       warnings.warn(
         """
