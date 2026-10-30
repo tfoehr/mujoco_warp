@@ -23,6 +23,7 @@ from mujoco_warp._src.types import MJ_MAXVAL
 from mujoco_warp._src.types import MJ_MINVAL
 from mujoco_warp._src.types import Q_LD_BLOCK_COMPACT
 from mujoco_warp._src.types import Q_LD_BLOCK_SPARSE
+from mujoco_warp._src.types import BlockDim
 from mujoco_warp._src.types import CamLightType
 from mujoco_warp._src.types import ConeType
 from mujoco_warp._src.types import ConstraintType
@@ -40,6 +41,7 @@ from mujoco_warp._src.types import vec10
 from mujoco_warp._src.types import vec11
 from mujoco_warp._src.warp_util import cache_kernel
 from mujoco_warp._src.warp_util import event_scope
+from mujoco_warp._src.warp_util import tile_block_dim
 
 wp.set_module_options({"enable_backward": False})
 
@@ -1250,7 +1252,10 @@ def _small_cholesky_factorize_block(block_size: int):
 def _tile_cholesky_factorize_block(tile: TileSet):
   # One diagonal block of `block_size` dofs per (world, block) tile group. tile_load_indexed gathers
   # the block's dense slots from CSR via a precomputed per-slot index tile (block_elemid, laid out
-  # [block, slot]); structurally absent pairs carry an out-of-bounds index that reads as 0.
+  # [block, slot]); structurally absent pairs carry an out-of-bounds index that reads as 0. The
+  # index tile is a register tile: Warp versions that support register indices for 1D gathers read
+  # each thread's own indices from registers instead of staging block_area ints in shared memory
+  # (on HIP this doubles the blocks per compute unit; older versions move them to shared memory).
   # Tile shapes must be compile-time constants, so the densify is inlined per kernel (sharing via a
   # wp.func is not possible) -- keep it in sync with _tile_cholesky_factorize_solve_block.
   block_size = tile.size
@@ -1271,7 +1276,7 @@ def _tile_cholesky_factorize_block(tile: TileSet):
     worldid, blk = wp.tid()
     start = block_dof[blk]
 
-    idx = wp.tile_load(block_elemid, shape=(block_area,), offset=(blk * block_area,), storage="shared")
+    idx = wp.tile_load(block_elemid, shape=(block_area,), offset=(blk * block_area,))
     block = wp.tile_load_indexed(M_in[worldid], idx, shape=(block_area,), storage="shared")
 
     L = wp.tile_reshape(block, (block_size, block_size))
@@ -1303,7 +1308,7 @@ def _factor_blocks(
         dim=(d.nworld, tile.adr.size),
         inputs=[m.qLD_block_adr, M, tile.elemid, tile.adr],
         outputs=[L],
-        block_dim=m.block_dim.cholesky_factorize,
+        block_dim=tile_block_dim(M.device, "factor", tile.size, m.block_dim.cholesky_factorize, BlockDim.cholesky_factorize),
       )
 
 
@@ -3504,6 +3509,8 @@ def _solve_blocks(
       # The triangular back-substitution is largely sequential, so large blocks prefer fewer threads
       # for better occupancy while moderate blocks still want a couple warps (16/27->64, 60->32).
       block_dim = m.block_dim.cholesky_solve if tile.size <= 40 else 32
+      if m.block_dim.cholesky_solve == BlockDim.cholesky_solve:
+        block_dim = tile_block_dim(L.device, "solve", tile.size, block_dim, block_dim)
       wp.launch_tiled(
         _tile_cholesky_solve_block(tile),
         dim=(d.nworld, tile.adr.size),
@@ -3578,7 +3585,7 @@ def _tile_cholesky_factorize_solve_block(tile: TileSet):
     start = block_dof[blk]
 
     # Densify the block (see _tile_cholesky_factorize_block for the gather rationale).
-    idx = wp.tile_load(block_elemid, shape=(block_area,), offset=(blk * block_area,), storage="shared")
+    idx = wp.tile_load(block_elemid, shape=(block_area,), offset=(blk * block_area,))
     block = wp.tile_load_indexed(M_in[worldid], idx, shape=(block_area,), storage="shared")
 
     L = wp.tile_reshape(block, (block_size, block_size))
@@ -3674,7 +3681,9 @@ def _factor_solve_blocks(
         dim=(d.nworld, tile.adr.size),
         inputs=[m.qLD_block_adr, M, tile.elemid, tile.adr, y],
         outputs=[x, L],
-        block_dim=m.block_dim.cholesky_factorize_solve,
+        block_dim=tile_block_dim(
+          M.device, "factor", tile.size, m.block_dim.cholesky_factorize_solve, BlockDim.cholesky_factorize_solve
+        ),
       )
 
 
