@@ -182,6 +182,29 @@ def use_graph_conditional(m) -> bool:
   return not device.is_capturing or wp.is_conditional_graph_supported()
 
 
+def tile_block_dim(device, kind: str, size: int, block_dim: int, default: int) -> int:
+  """block_dim for a dense tile Cholesky kernel on a `size` x `size` block.
+
+  `kind` is "factor" (factorization, optionally followed by a solve) or "solve" (triangular solves
+  with an existing factor). A block_dim configured by the user (differing from `default`) is
+  returned unchanged, as is the default on devices other than HIP.
+
+  On HIP the factorization distributes rows over all threads of the block while the triangular
+  solves run on the first wavefront; small blocks therefore prefer a single wave32 wavefront and
+  larger ones more waves to hide shared-memory latency. Measured on gfx1151 (wave32, 4096 worlds,
+  us per launch for block_dim 32/64/128):
+    factor+solve: n=20 101/150/232, n=27 182/199/349, n=36 297/342/519, n=43 613/552/756,
+                  n=60 1674/1449/1571, n=64 (with gather) 4328/2460/2049
+    solve:        n=20 65/71/101, n=27 83/92/115, n=36 142/117/160, n=43 242/182/199,
+                  n=48 541/383/322, n=60 1126/755/580
+  """
+  if block_dim != default or not getattr(device, "is_hip", False):
+    return block_dim
+  if kind == "solve":
+    return 32 if size <= 32 else 64 if size <= 44 else 128
+  return 32 if size <= 36 else 64 if size <= 60 else 128
+
+
 def check_toolkit_driver():
   wp.init()
   if wp.get_device().is_cuda and not getattr(wp.get_device(), "is_hip", False):

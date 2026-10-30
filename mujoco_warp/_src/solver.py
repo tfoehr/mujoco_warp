@@ -34,6 +34,7 @@ from mujoco_warp._src.types import OverflowType
 from mujoco_warp._src.types import SolverContext
 from mujoco_warp._src.warp_util import cache_kernel
 from mujoco_warp._src.warp_util import event_scope
+from mujoco_warp._src.warp_util import tile_block_dim
 from mujoco_warp._src.warp_util import use_graph_conditional
 
 wp.set_module_options({"enable_backward": False, "default_grid_stride": False})
@@ -2955,7 +2956,9 @@ def _cholesky_factorize_solve(
       dim=d.nworld,
       inputs=[ctx.grad, ctx.h, ctx.state_changed_count if skip_noflip else d.nefc, ctx.done],
       outputs=[ctx.search, ctx.search_dot, ctx.newton_decrement],
-      block_dim=m.block_dim.update_gradient_cholesky,
+      block_dim=tile_block_dim(
+        ctx.h.device, "factor", m.nv, m.block_dim.update_gradient_cholesky, types.BlockDim.update_gradient_cholesky
+      ),
     )
   else:
     wp.launch(
